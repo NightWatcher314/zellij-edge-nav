@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      - name: Build WASM
+        run: cargo build --release --target wasm32-wasip1
+      - name: Prepare dist
+        run: |
+          mkdir -p dist
+          cp target/wasm32-wasip1/release/zellij_edge_nav.wasm dist/zellij_edge_nav.wasm
+          sha256sum dist/zellij_edge_nav.wasm > dist/zellij_edge_nav.wasm.sha256
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/zellij_edge_nav.wasm
+            dist/zellij_edge_nav.wasm.sha256
+          generate_release_notes: true
