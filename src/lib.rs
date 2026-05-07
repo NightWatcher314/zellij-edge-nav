@@ -5,6 +5,7 @@ use zellij_tile::prelude::*;
 struct State {
     tabs: Vec<TabInfo>,
     panes: PaneManifest,
+    handoff_command: String,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -13,18 +14,33 @@ enum OutputMode {
     TmuxFlag,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Action {
+    Query,
+    Move,
+}
+
 struct Request {
     direction: Direction,
     output_mode: OutputMode,
+    action: Action,
 }
 
 register_plugin!(State);
 
 impl ZellijPlugin for State {
-    fn load(&mut self, _configuration: BTreeMap<String, String>) {
+    fn load(&mut self, configuration: BTreeMap<String, String>) {
+        self.handoff_command = configuration
+            .get("handoff_command")
+            .or_else(|| configuration.get("handoff-command"))
+            .cloned()
+            .unwrap_or_else(|| "kitten @ kitten neighboring_window.py {direction}".to_owned());
+
         request_permission(&[
             PermissionType::ReadApplicationState,
             PermissionType::ReadCliPipes,
+            PermissionType::ChangeApplicationState,
+            PermissionType::RunCommands,
         ]);
         subscribe(&[EventType::TabUpdate, EventType::PaneUpdate]);
     }
@@ -54,16 +70,20 @@ impl ZellijPlugin for State {
             .unwrap_or(pipe_message.name.as_str())
             .trim();
 
-        let Some(request) = parse_request(query) else {
+        let Some(mut request) = parse_request(query) else {
             if let Some(pipe_id) = pipe_id.as_deref() {
                 cli_pipe_output(
                     pipe_id,
-                    "error: expected left/right/up/down or pane_at_left/right/top/bottom\n",
+                    "error: expected left/right/up/down, move:left/right/up/down, or pane_at_left/right/top/bottom\n",
                 );
                 unblock_cli_pipe_input(pipe_id);
             }
             return false;
         };
+
+        if message_requests_move(&pipe_message) {
+            request.action = Action::Move;
+        }
 
         let active_tab = self
             .tabs
@@ -75,6 +95,14 @@ impl ZellijPlugin for State {
         let at_edge = self
             .focused_pane_at_edge(active_tab, request.direction)
             .unwrap_or(true);
+
+        if request.action == Action::Move {
+            if at_edge {
+                hand_off_to_outer_nav(request.direction, &self.handoff_command);
+            } else {
+                move_focus(request.direction);
+            }
+        }
 
         let result = match request.output_mode {
             OutputMode::Words => {
@@ -109,7 +137,8 @@ impl State {
 }
 
 fn parse_request(raw: &str) -> Option<Request> {
-    let query = raw
+    let mut action = Action::Query;
+    let mut query = raw
         .trim()
         .trim_matches('\'')
         .trim_matches('"')
@@ -118,10 +147,22 @@ fn parse_request(raw: &str) -> Option<Request> {
         .trim()
         .to_ascii_lowercase();
 
+    if let Some(direction) = query
+        .strip_prefix("move:")
+        .or_else(|| query.strip_prefix("move-"))
+        .or_else(|| query.strip_prefix("move_"))
+        .or_else(|| query.strip_prefix("nav:"))
+        .or_else(|| query.strip_prefix("navigate:"))
+    {
+        action = Action::Move;
+        query = direction.trim().to_owned();
+    }
+
     if let Some(direction) = parse_direction(&query) {
         return Some(Request {
             direction,
             output_mode: OutputMode::Words,
+            action,
         });
     }
 
@@ -139,6 +180,7 @@ fn parse_request(raw: &str) -> Option<Request> {
     Some(Request {
         direction,
         output_mode: OutputMode::TmuxFlag,
+        action,
     })
 }
 
@@ -197,6 +239,39 @@ fn touches_in_direction(a: &PaneInfo, b: &PaneInfo, direction: Direction) -> boo
 
 fn ranges_overlap(a1: usize, a2: usize, b1: usize, b2: usize) -> bool {
     a1 < b2 && b1 < a2
+}
+
+fn message_requests_move(pipe_message: &PipeMessage) -> bool {
+    [
+        Some(pipe_message.name.as_str()),
+        pipe_message.args.get("action").map(String::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "move" | "nav" | "navigate"
+        )
+    })
+}
+
+fn hand_off_to_outer_nav(direction: Direction, handoff_command: &str) {
+    let command = if handoff_command.contains("{direction}") {
+        handoff_command.replace("{direction}", direction_name(direction))
+    } else {
+        format!("{} {}", handoff_command, direction_name(direction))
+    };
+    run_command(&["sh", "-lc", command.as_str()], BTreeMap::new());
+}
+
+fn direction_name(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Left => "left",
+        Direction::Right => "right",
+        Direction::Up => "up",
+        Direction::Down => "down",
+    }
 }
 
 #[no_mangle]

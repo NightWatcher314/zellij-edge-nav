@@ -2,9 +2,12 @@
 
 A tiny [Zellij](https://zellij.dev/) WASM plugin for Kitty/tmux-style pane navigation.
 
-It **only checks** whether the currently focused tiled Zellij pane is on a requested edge. It does **not** move focus by itself.
+It can either:
 
-This is useful when an outer terminal/window manager (Kitty, yabai, etc.) needs to decide whether to keep navigation inside Zellij or hand off to the outer window system.
+- check whether the currently focused tiled Zellij pane is on a requested edge
+- handle navigation itself, moving inside Zellij or handing off to Kitty at the edge
+
+This is useful for tmux-like navigation where the inner multiplexer owns the decision: move inside Zellij when possible, and call the outer Kitty navigation only at the edge.
 
 ## Output
 
@@ -39,7 +42,14 @@ Add this to `~/.config/zellij/config.kdl`:
 
 ```kdl
 plugins {
-    edge-nav location="https://github.com/NightWatcher314/zellij-edge-nav/releases/latest/download/zellij_edge_nav.wasm"
+    edge-nav location="https://github.com/NightWatcher314/zellij-edge-nav/releases/download/v0.3.0/zellij_edge_nav.wasm" {
+        // Optional. Defaults to this value.
+        handoff_command "kitten @ kitten neighboring_window.py {direction}"
+    }
+}
+
+load_plugins {
+    edge-nav
 }
 ```
 
@@ -60,10 +70,64 @@ Zellij will download/cache the plugin when needed. On first load, Zellij will as
 
 - reading Zellij application state, so it can inspect pane geometry
 - controlling CLI pipe output, so it can print `edge` / `inside` back to the caller
+- changing Zellij application state, so it can move focus inside Zellij
+- running commands, so it can call Kitty navigation at the edge
 
 > For reproducible installs, replace `latest` with a specific tag, for example:
 >
-> `https://github.com/NightWatcher314/zellij-edge-nav/releases/download/v0.2.0/zellij_edge_nav.wasm`
+> `https://github.com/NightWatcher314/zellij-edge-nav/releases/download/v0.3.0/zellij_edge_nav.wasm`
+
+## Zellij keybindings for Kitty handoff
+
+Bind your navigation keys to the plugin's `move` action:
+
+```kdl
+shared_except "locked" {
+    bind "Alt h" {
+        MessagePlugin "edge-nav" {
+            name "move"
+            payload "left"
+        }
+    }
+    bind "Alt j" {
+        MessagePlugin "edge-nav" {
+            name "move"
+            payload "down"
+        }
+    }
+    bind "Alt k" {
+        MessagePlugin "edge-nav" {
+            name "move"
+            payload "up"
+        }
+    }
+    bind "Alt l" {
+        MessagePlugin "edge-nav" {
+            name "move"
+            payload "right"
+        }
+    }
+}
+```
+
+In move mode, the plugin:
+
+- calls Zellij `MoveFocus` when another tiled pane exists in that direction
+- runs the configured `handoff_command` when the focused pane is at the edge
+
+`handoff_command` is executed through `sh -lc`. Use `{direction}` where the plugin should insert `left`, `right`, `up`, or `down`. If the placeholder is omitted, the direction is appended as the final argument.
+
+For example, if your Kitty kitten is installed elsewhere:
+
+```kdl
+plugins {
+    edge-nav location="https://github.com/NightWatcher314/zellij-edge-nav/releases/download/v0.3.0/zellij_edge_nav.wasm" {
+        handoff_command "kitten @ kitten ~/.config/kitty/neighboring_window.py {direction}"
+    }
+}
+```
+
+Your Kitty binding can keep calling a kitten first, as long as the kitten passes the original key through when the foreground command is `zellij`.
 
 ## Local wrapper script
 
@@ -120,9 +184,9 @@ esac
 
 In a Kitty kitten, the decision can be:
 
-1. If foreground command is `zellij`, run `zellij-edge-nav <direction>`.
-2. If it returns `inside`, send/run `zellij action move-focus <direction>` or send your Zellij key binding.
-3. If it returns `edge`, use Kitty's `neighboring_window()` or your window-manager handoff.
+1. If foreground command is `zellij`, pass the original key through.
+2. Zellij sends that key to this plugin.
+3. This plugin moves inside Zellij or calls back to Kitty at the edge.
 
 ## Manual local build
 
