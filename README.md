@@ -34,7 +34,10 @@ Then query it with:
 zellij action pipe --plugin edge-nav --name edge-nav -- left
 ```
 
-Zellij will download/cache the plugin when needed.
+Zellij will download/cache the plugin when needed. On first load, Zellij will ask you to allow the plugin permissions for:
+
+- reading Zellij application state, so it can inspect pane geometry
+- controlling CLI pipe output, so it can print `edge` / `inside` back to the caller
 
 > For reproducible installs, replace `latest` with a specific tag, for example:
 >

@@ -11,6 +11,10 @@ register_plugin!(State);
 
 impl ZellijPlugin for State {
     fn load(&mut self, _configuration: BTreeMap<String, String>) {
+        request_permission(&[
+            PermissionType::ReadApplicationState,
+            PermissionType::ReadCliPipes,
+        ]);
         subscribe(&[EventType::TabUpdate, EventType::PaneUpdate]);
     }
 
@@ -126,3 +130,6 @@ fn touches_in_direction(a: &PaneInfo, b: &PaneInfo, direction: Direction) -> boo
 fn ranges_overlap(a1: usize, a2: usize, b1: usize, b2: usize) -> bool {
     a1 < b2 && b1 < a2
 }
+
+#[no_mangle]
+pub extern "C" fn _start() {}
