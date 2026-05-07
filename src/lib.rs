@@ -7,6 +7,17 @@ struct State {
     panes: PaneManifest,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum OutputMode {
+    Words,
+    TmuxFlag,
+}
+
+struct Request {
+    direction: Direction,
+    output_mode: OutputMode,
+}
+
 register_plugin!(State);
 
 impl ZellijPlugin for State {
@@ -33,17 +44,22 @@ impl ZellijPlugin for State {
             _ => None,
         };
 
-        let direction = pipe_message
+        let query = pipe_message
             .payload
             .as_deref()
+            .or_else(|| pipe_message.args.get("query").map(String::as_str))
+            .or_else(|| pipe_message.args.get("format").map(String::as_str))
             .or_else(|| pipe_message.args.get("direction").map(String::as_str))
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(pipe_message.name.as_str())
+            .trim();
 
-        let Some(direction) = parse_direction(&direction) else {
+        let Some(request) = parse_request(query) else {
             if let Some(pipe_id) = pipe_id.as_deref() {
-                cli_pipe_output(pipe_id, "error: expected one of left/right/up/down\n");
+                cli_pipe_output(
+                    pipe_id,
+                    "error: expected left/right/up/down or pane_at_left/right/top/bottom\n",
+                );
                 unblock_cli_pipe_input(pipe_id);
             }
             return false;
@@ -56,14 +72,25 @@ impl ZellijPlugin for State {
             .map(|tab| tab.position)
             .unwrap_or(0);
 
-        let result = if let Some(pane) = get_focused_pane(active_tab, &self.panes) {
-            if is_on_edge(&pane, direction, &self.panes, active_tab) {
-                "edge\n"
-            } else {
-                "inside\n"
+        let at_edge = self
+            .focused_pane_at_edge(active_tab, request.direction)
+            .unwrap_or(true);
+
+        let result = match request.output_mode {
+            OutputMode::Words => {
+                if at_edge {
+                    "edge\n"
+                } else {
+                    "inside\n"
+                }
             }
-        } else {
-            "edge\n"
+            OutputMode::TmuxFlag => {
+                if at_edge {
+                    "1\n"
+                } else {
+                    "0\n"
+                }
+            }
         };
 
         if let Some(pipe_id) = pipe_id.as_deref() {
@@ -72,6 +99,47 @@ impl ZellijPlugin for State {
         }
         false
     }
+}
+
+impl State {
+    fn focused_pane_at_edge(&self, tab_position: usize, direction: Direction) -> Option<bool> {
+        let pane = get_focused_pane(tab_position, &self.panes)?;
+        Some(is_on_edge(&pane, direction, &self.panes, tab_position))
+    }
+}
+
+fn parse_request(raw: &str) -> Option<Request> {
+    let query = raw
+        .trim()
+        .trim_matches('\'')
+        .trim_matches('"')
+        .trim_start_matches("#{")
+        .trim_end_matches('}')
+        .trim()
+        .to_ascii_lowercase();
+
+    if let Some(direction) = parse_direction(&query) {
+        return Some(Request {
+            direction,
+            output_mode: OutputMode::Words,
+        });
+    }
+
+    let edge = query
+        .strip_prefix("pane_at_")
+        .or_else(|| query.strip_prefix("@pane_at_"))?;
+    let direction = match edge {
+        "left" | "l" | "west" => Direction::Left,
+        "right" | "r" | "east" => Direction::Right,
+        "top" | "up" | "u" | "north" => Direction::Up,
+        "bottom" | "down" | "d" | "south" => Direction::Down,
+        _ => return None,
+    };
+
+    Some(Request {
+        direction,
+        output_mode: OutputMode::TmuxFlag,
+    })
 }
 
 fn parse_direction(s: &str) -> Option<Direction> {

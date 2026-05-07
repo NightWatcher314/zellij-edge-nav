@@ -8,7 +8,11 @@ This is useful when an outer terminal/window manager (Kitty, yabai, etc.) needs 
 
 ## Output
 
-When called with a direction, the plugin prints exactly one of:
+The plugin supports two output modes.
+
+### Word mode
+
+When called with a direction, it prints exactly one of:
 
 - `edge` — the focused Zellij pane is already on that edge
 - `inside` — there is another Zellij pane in that direction
@@ -17,6 +21,17 @@ Supported directions:
 
 - `left`, `right`, `up`, `down`
 - aliases: `l`, `r`, `u`, `d`, `west`, `east`, `north`, `south`
+
+### tmux-format style mode
+
+When called with a tmux-like pane edge query, it prints `1` for true or `0` for false:
+
+- `pane_at_left` or `#{pane_at_left}`
+- `pane_at_right` or `#{pane_at_right}`
+- `pane_at_top` or `#{pane_at_top}`
+- `pane_at_bottom` or `#{pane_at_bottom}`
+
+These names mirror tmux's `pane_at_left/right/top/bottom` format variables, but they are returned through Zellij's pipe API rather than exported as process environment variables.
 
 ## Recommended installation: Zellij plugin alias
 
@@ -28,10 +43,17 @@ plugins {
 }
 ```
 
-Then query it with:
+Then query it with word output:
 
 ```sh
 zellij action pipe --plugin edge-nav --name edge-nav -- left
+```
+
+Or query it with tmux-format style output:
+
+```sh
+zellij action pipe --plugin edge-nav --name edge-nav -- '#{pane_at_left}'
+# prints 1 or 0
 ```
 
 Zellij will download/cache the plugin when needed. On first load, Zellij will ask you to allow the plugin permissions for:
@@ -41,7 +63,7 @@ Zellij will download/cache the plugin when needed. On first load, Zellij will as
 
 > For reproducible installs, replace `latest` with a specific tag, for example:
 >
-> `https://github.com/NightWatcher314/zellij-edge-nav/releases/download/v0.1.0/zellij_edge_nav.wasm`
+> `https://github.com/NightWatcher314/zellij-edge-nav/releases/download/v0.2.0/zellij_edge_nav.wasm`
 
 ## Local wrapper script
 
@@ -51,19 +73,26 @@ Create `~/.local/bin/zellij-edge-nav`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-DIR=${1:-}
-if [[ -z "$DIR" || ! "$DIR" =~ ^(left|right|up|down|l|r|u|d|west|east|north|south)$ ]]; then
-  echo "usage: zellij-edge-nav <left|right|up|down> [session]" >&2
+if [[ ${1:-} == "-F" || ${1:-} == "--format" ]]; then
+  QUERY=${2:-}
+  SESSION=${3:-${ZELLIJ_SESSION_NAME:-}}
+else
+  QUERY=${1:-}
+  SESSION=${2:-${ZELLIJ_SESSION_NAME:-}}
+fi
+
+if [[ -z "$QUERY" ]]; then
+  echo "usage: zellij-edge-nav <left|right|up|down|pane_at_left|...> [session]" >&2
+  echo "       zellij-edge-nav -F '#{pane_at_left}' [session]" >&2
   exit 2
 fi
 
-SESSION=${2:-${ZELLIJ_SESSION_NAME:-}}
 args=(zellij)
 if [[ -n "$SESSION" ]]; then
   args+=(-s "$SESSION")
 fi
 
-exec "${args[@]}" action pipe --plugin edge-nav --name edge-nav -- "$DIR"
+exec "${args[@]}" action pipe --plugin edge-nav --name edge-nav -- "$QUERY"
 ```
 
 Make it executable:
@@ -121,8 +150,8 @@ zellij action pipe \
 Maintainers can publish a new release by pushing a semver tag:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 GitHub Actions will build and attach:
